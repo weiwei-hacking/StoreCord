@@ -9,7 +9,7 @@ with open('token.txt', 'r') as f:
 intents = discord.Intents.all()
 intents.members = True
 
-activity = discord.Game(name="/help to get more info")
+activity = discord.Game(name="StoreCord v1.0.0")
 bot = commands.Bot(command_prefix='/', intents=intents, status=discord.Status.idle, activity=activity)
 
 async def load_extensions():
