@@ -25,6 +25,11 @@ A Discord bot for managing a online store system, allowing users to purchase pro
   - Check user credits (`/balance`).
   - Modify user credits (`/credits modify`).
 
+- **User CreditsKey Management** (`/creditskey`):
+  - Add credits keys (`/creditskey add`).
+  - Remove credits keys (`/creditskey remove`).
+  - Redeem credit key (`/redeem`).
+
 ## Prerequisites
 
 - Python 3.8 or higher
@@ -74,6 +79,8 @@ A Discord bot for managing a online store system, allowing users to purchase pro
    - `/balance [member]`: Check a user's credits.
    - `/credits modify <member> <action> <amount>`: Add or remove credits.
    - `/user [member]`: View user information.
+   - `/creditkey <add/remove/show> <key_tpye> [amount(only add)]`: Add or remove credit key.
+   - `/redeem <key>`: Redeem a creditkey.
 
 ## File Structure
 
@@ -87,12 +94,17 @@ discord-shop-bot/
 │   ├── purchase.py      # Handles product purchases
 │   ├── stock.py         # Displays stock and handles restocking
 │   └── userpanel.py     # Displays user information
+|   └── creditkey.py     # Manages credit key
 │
 ├── configs/
 │   ├── balance.json     # User credits data
 │   ├── permissions.json # Permission settings
 │   ├── price.json       # Product prices
 │   └── normal.json      # Misc settings
+│
+├── creditkey/
+│   ├── 100.txt          # 100 credit key
+│   ├── custom.txt       # custom credit key
 │
 ├── stock/               # Product stock files (.txt)
 ├── order/               # Generated order files (.txt)
