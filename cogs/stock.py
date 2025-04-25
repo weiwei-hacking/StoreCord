@@ -22,6 +22,14 @@ def load_configs():
         print(f"Error loading normal.json: {e}")
         return {}
 
+def load_prices():
+    try:
+        with open('configs/price.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading price.json: {e}")
+        return {}
+
 def has_special_permission(user_id, role_ids):
     permissions = load_permissions()
     user_id_str = str(user_id).strip()
@@ -47,11 +55,13 @@ class Stock(commands.Cog):
             return
 
         stock_info = []
+        prices = load_prices()
         for txt_file in txt_files:
             file_path = os.path.join(stock_dir, txt_file)
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = [line.strip() for line in f if line.strip()]
-            stock_info.append((txt_file[:-4], len(lines)))
+            price = prices.get(txt_file, "N/A")
+            stock_info.append((txt_file[:-4], len(lines), price))
 
         random_color = discord.Color(random.randint(0, 0xFFFFFF))
         embed = discord.Embed(
@@ -59,8 +69,12 @@ class Stock(commands.Cog):
             color=random_color,
             timestamp=datetime.now()
         )
-        for file_name, line_count in stock_info:
-            embed.add_field(name=file_name, value=f"{line_count} stock", inline=True)
+        for file_name, line_count, price in stock_info:
+            embed.add_field(
+                name=file_name,
+                value=f"{line_count} stock, Price: {price}",
+                inline=False
+            )
         embed.set_footer(text=f"Queried by {interaction.user.display_name}")
 
         await interaction.response.send_message(embed=embed)
