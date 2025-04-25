@@ -63,9 +63,7 @@ class Product(commands.Cog):
             await interaction.response.send_message("You do not have permission to use this command!", ephemeral=True)
             return
 
-        if not name.isalnum():
-            await interaction.response.send_message("Product name can only contain letters and numbers!", ephemeral=True)
-            return
+
 
         if price < 0:
             await interaction.response.send_message("Price cannot be negative!", ephemeral=True)
