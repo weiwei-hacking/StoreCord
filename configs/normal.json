@@ -1,4 +1,6 @@
 {
     "restock_channel":"",
-    "restock_notify":""
+    "restock_notify":"",
+    "public_logs":"",
+    "private_logs":""
 }
