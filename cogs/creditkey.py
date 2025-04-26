@@ -15,6 +15,14 @@ def load_permissions():
         print(f"Error loading permissions.json: {e}")
         return {"users": [], "roles": []}
 
+def load_configs():
+    try:
+        with open('configs/normal.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading normal.json: {e}")
+        return {}
+
 def has_special_permission(user_id, role_ids):
     permissions = load_permissions()
     user_id_str = str(user_id).strip()
@@ -132,6 +140,7 @@ class creditkey(commands.Cog):
         found = False
         points = 0
         target_file = None
+        key_type = None
 
         if os.path.exists('creditkey'):
             for txt_file in os.listdir('creditkey'):
@@ -142,6 +151,7 @@ class creditkey(commands.Cog):
                         if code in lines:
                             found = True
                             target_file = file_path
+                            key_type = txt_file[:-4]  # Remove .txt extension
                             if txt_file == "custom.txt":
                                 try:
                                     points = int(code.split('.')[-1])
@@ -186,8 +196,57 @@ class creditkey(commands.Cog):
             with open(balance_file, 'w', encoding='utf-8') as f:
                 json.dump(users, f, indent=4)
             
+            # Send success message to the user
             embed = discord.Embed(title="SUCCESS!", description=f"You are geted **{points}** credit, now you has **{users[user_id]}** credit", color=discord.Color.green())
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            # Load channel IDs from configs/normal.json
+            configs = load_configs()
+            public_logs_id = configs.get('public_logs')
+            private_logs_id = configs.get('private_logs')
+
+            # Get current Unix timestamp
+            current_time = int(discord.utils.utcnow().timestamp())
+
+            # Send to public_logs channel
+            if public_logs_id:
+                public_channel = self.bot.get_channel(int(public_logs_id))
+                if public_channel:
+                    embed = discord.Embed(
+                        title=(f"**{key_type}** credit key redeemed"),
+                        description=f"Someone redeemed the **{key_type}** credit key {code} at <t:{current_time}:R>.",
+                        color=discord.Color.gold(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    embed.set_footer(text="Credit Redeemed")
+                    await public_channel.send(embed=embed)
+                else:
+                    print(f"Could not find public_logs channel ID: {public_logs_id}")
+
+            # Send to private_logs channel
+            if private_logs_id:
+                private_channel = self.bot.get_channel(int(private_logs_id))
+                if private_channel:
+                    try:
+                        embed = discord.Embed(
+                            title=(f"**{key_type}** credit key redeemed"),
+                            description=(
+                                f"{interaction.user.mention} redeemed the **{key_type}** credit key {code} at <t:{current_time}:T>\n"
+                                f"New balance: {users[user_id]}"
+                            ),
+                            color=discord.Color.blue(),
+                            timestamp=discord.utils.utcnow()
+                        )
+                        embed.set_footer(text="Credit Redeemed")
+                        await private_channel.send(embed=embed)
+                        print(f"Successfully sent redeem log to private_logs channel: {private_logs_id}")
+                    except Exception as e:
+                        print(f"Failed to send to private_logs channel {private_logs_id}: {e}")
+                else:
+                    print(f"Could not find or access private_logs channel ID: {private_logs_id}")
+            else:
+                print("private_logs channel ID not provided, skipping private log.")
+
         except Exception as e:
             embed = discord.Embed(title="WARNING!", description=f"An unexpected error occurred\n```{str(e)}```", color=discord.Color.red())
             await interaction.response.send_message(embed=embed, ephemeral=True)
