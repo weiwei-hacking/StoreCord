@@ -8,14 +8,14 @@ import string
 import hashlib
 import time
 
+last_purchase_times = {}
+
 def load_balances():
     try:
         with open('configs/balance.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # Convert balance values to integers
             return {user_id: int(balance) for user_id, balance in data.items()}
     except Exception as e:
-        print(f"Error loading balance.json: {e}")
         return {}
 
 def save_balances(balances):
@@ -23,25 +23,36 @@ def save_balances(balances):
         with open('configs/balance.json', 'w', encoding='utf-8') as f:
             json.dump(balances, f, indent=4, ensure_ascii=False)
     except Exception as e:
-        print(f"Error saving balance.json: {e}")
+        pass
 
 def load_prices():
     try:
         with open('configs/price.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # Convert price values to integers
-            return {product: int(price) for product, price in data.items()}
+            for product, details in data.items():
+                data[product]['price'] = int(details['price'])
+                if details.get('limit') is not None:
+                    data[product]['limit'] = int(details['limit'])
+            return data
     except Exception as e:
-        print(f"Error loading price.json: {e}")
         return {}
 
 def load_configs():
     try:
         with open('configs/normal.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if 'cooldown' in data and data['cooldown'] is not None:
+                data['cooldown'] = int(data['cooldown'])
+            return data
+    except Exception as e:
+        return {}
+
+def load_permissions():
+    try:
+        with open('configs/permissions.json', 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
-        print(f"Error loading normal.json: {e}")
-        return {}
+        return {"users": [], "roles": []}
 
 class Purchase(commands.Cog):
     def __init__(self, bot):
@@ -51,12 +62,25 @@ class Purchase(commands.Cog):
     @app_commands.describe(amount="Number of products to purchase")
     async def purchase(self, interaction: discord.Interaction, amount: int):
         try:
+            configs = load_configs()
+            cooldown = configs.get('cooldown')
+            user_id_str = str(interaction.user.id)
+            current_time = time.time()
+
+            if cooldown is not None and cooldown > 0:
+                last_purchase = last_purchase_times.get(user_id_str, 0)
+                time_since_last_purchase = current_time - last_purchase
+                if time_since_last_purchase < cooldown:
+                    remaining_time = int(cooldown - time_since_last_purchase)
+                    await interaction.response.send_message(f"Please wait {remaining_time} seconds before using this command again!", ephemeral=True)
+                    return
+                last_purchase_times[user_id_str] = current_time
+
             if amount <= 0:
                 await interaction.response.send_message("Purchase quantity must be a positive number!", ephemeral=True)
                 return
 
             balances = load_balances()
-            user_id_str = str(interaction.user.id)
             user_balance = balances.get(user_id_str, 0)
 
             prices = load_prices()
@@ -65,7 +89,8 @@ class Purchase(commands.Cog):
                 return
 
             min_price = float('inf')
-            for price in prices.values():
+            for product_data in prices.values():
+                price = product_data.get('price', float('inf'))
                 if price < min_price:
                     min_price = price
             if user_balance < min_price:
@@ -73,7 +98,8 @@ class Purchase(commands.Cog):
                 return
 
             affordable_products = {}
-            for product_file, price in prices.items():
+            for product_file, product_data in prices.items():
+                price = product_data.get('price', 0)
                 total_cost = price * amount
                 if user_balance >= total_cost:
                     affordable_products[product_file] = (price, total_cost)
@@ -108,7 +134,7 @@ class Purchase(commands.Cog):
                         discord.SelectOption(
                             label=f"{name}",
                             value=f"{name}|{price}|{total_cost}",
-                            description=f"Price: {total_cost} ({price} credit/per)"
+                            description=f"Price: {total_cost} ({price} credits/unit)"
                         ) for name, price, total_cost in products
                     ]
                     super().__init__(placeholder="Select a product...", options=options, min_values=1, max_values=1)
@@ -121,6 +147,44 @@ class Purchase(commands.Cog):
                         product_name = selected[0]
                         price = int(selected[1])
                         total_cost = int(selected[2])
+
+                        product_file = f"{product_name}.txt"
+                        product_data = prices.get(product_file, {})
+                        purchase_limit = product_data.get('limit')
+                        if purchase_limit is not None and self.amount > purchase_limit:
+                            await interaction.response.send_message(
+                                f"The product '{product_name}' has a purchase limit of {purchase_limit} units per transaction, but you attempted to purchase {self.amount} units!",
+                                ephemeral=True
+                            )
+
+                            configs = load_configs()
+                            limit_alert_id = configs.get('limit_alert')
+                            if limit_alert_id:
+                                try:
+                                    alert_channel = self.bot.get_channel(int(limit_alert_id))
+                                    if alert_channel:
+                                        permissions = load_permissions()
+                                        mentions = []
+                                        for user_id in permissions.get('users', []):
+                                            mentions.append(f"<@{user_id}>")
+                                        for role_id in permissions.get('roles', []):
+                                            mentions.append(f"<@&{role_id}>")
+                                        mention_str = " ".join(mentions) if mentions else "No designated personnel"
+                                        current_time = int(discord.utils.utcnow().timestamp())
+                                        embed = discord.Embed(
+                                            description=(
+                                                f"{interaction.user.mention} attempted to purchase `{product_name}` **x{self.amount}**, "
+                                                f"but exceeded the limit of {purchase_limit} units!\n"
+                                                f"Time: <t:{current_time}:F>"
+                                            ),
+                                            color=discord.Color.red(),
+                                            timestamp=discord.utils.utcnow()
+                                        )
+                                        embed.set_footer(text="Purchase Limit Warning")
+                                        await alert_channel.send(content=mention_str, embed=embed)
+                                except ValueError:
+                                    pass
+                            return
 
                         class ConfirmView(discord.ui.View):
                             def __init__(self, interaction, product_name, price, total_cost, amount):
@@ -161,7 +225,7 @@ class Purchase(commands.Cog):
                         user_id_str = str(interaction.user.id)
                         user_balance = balances.get(user_id_str, 0)
                         if user_balance < total_cost:
-                            await interaction.followup.send("Your credits are insufficient to complete the purchase!", ephemeral=True)
+                            await interaction.followup.send("Your credits are insufficient to complete this purchase!", ephemeral=True)
                             return
                         balances[user_id_str] = user_balance - total_cost
                         save_balances(balances)
@@ -213,96 +277,57 @@ class Purchase(commands.Cog):
                             await interaction.followup.send(file=discord_file, ephemeral=True)
 
                         try:
-                            # Load channel IDs from configs/normal.json
                             configs = load_configs()
                             public_logs_id = configs.get('public_logs')
                             private_logs_id = configs.get('private_logs')
 
-                            # Get current Unix timestamp
                             current_time = int(discord.utils.utcnow().timestamp())
 
-                            # Send to public_logs channel if ID is provided
                             if public_logs_id:
                                 try:
                                     public_channel = self.bot.get_channel(int(public_logs_id))
                                     if public_channel:
-                                        try:
-                                            # Check bot's permissions
-                                            permissions = public_channel.permissions_for(public_channel.guild.me)
-                                            if not permissions.send_messages:
-                                                print(f"Bot lacks Send Messages permission in public_logs channel {public_logs_id}")
-                                            else:
-                                                embed = discord.Embed(
-                                                    description=f"Someone purchased `{product_name}` **x{self.amount}** with *{total_cost} credit* at <t:{current_time}:R>",
-                                                    color=discord.Color.gold(),
-                                                    timestamp=discord.utils.utcnow()
-                                                )
-                                                embed.set_footer(text="Purchase Completed")
-                                                await public_channel.send(embed=embed)
-                                        except Exception as e:
-                                            print(f"Failed to send to public_logs channel {public_logs_id}: {e}")
-                                    else:
-                                        print(f"Could not find or access public_logs channel ID: {public_logs_id}")
-                                        for guild in self.bot.guilds:
-                                            channel = guild.get_channel(int(public_logs_id))
-                                            if channel:
-                                                print(f"Found public_logs channel in guild: {guild.name} (ID: {guild.id})")
-                                            else:
-                                                print(f"public_logs channel {public_logs_id} not found in guild: {guild.name} (ID: {guild.id})")
-                                except ValueError as e:
-                                    print(f"Invalid public_logs channel ID {public_logs_id}: {e}")
-                            else:
-                                print("public_logs channel ID not provided, skipping public log.")
+                                        permissions = public_channel.permissions_for(public_channel.guild.me)
+                                        if permissions.send_messages:
+                                            embed = discord.Embed(
+                                                description=f"Someone purchased `{product_name}` **x{self.amount}** with *{total_cost} credits* at <t:{current_time}:R>",
+                                                color=discord.Color.gold(),
+                                                timestamp=discord.utils.utcnow()
+                                            )
+                                            embed.set_footer(text="Purchase Completed")
+                                            await public_channel.send(embed=embed)
+                                except ValueError:
+                                    pass
 
-                            # Send to private_logs channel if ID is provided
                             if private_logs_id:
                                 try:
                                     private_channel = self.bot.get_channel(int(private_logs_id))
                                     if private_channel:
-                                        try:
-                                            # Check bot's permissions
-                                            permissions = private_channel.permissions_for(private_channel.guild.me)
-                                            if not permissions.send_messages:
-                                                print(f"Bot lacks Send Messages permission in private_logs channel {private_logs_id}")
-                                            else:
-                                                embed = discord.Embed(
-                                                    description=(
-                                                        f"{interaction.user.mention} purchased the `{product_name}` **x{self.amount}** with *{total_cost} credits* at <t:{current_time}:T>\n"
-                                                        f"New balance: {balances[user_id_str]} | order id: ||{order_id}||"
-                                                    ),
-                                                    color=discord.Color.yellow(),
-                                                    timestamp=discord.utils.utcnow()
-                                                )
-                                                embed.set_footer(text="Purchase Completed")
-                                                await private_channel.send(embed=embed)
-                                        except Exception as e:
-                                            print(f"Failed to send to private_logs channel {private_logs_id}: {e}")
-                                    else:
-                                        print(f"Could not find or access private_logs channel ID: {private_logs_id}")
-                                        for guild in self.bot.guilds:
-                                            channel = guild.get_channel(int(private_logs_id))
-                                            if channel:
-                                                print(f"Found private_logs channel in guild: {guild.name} (ID: {guild.id})")
-                                            else:
-                                                print(f"private_logs channel {private_logs_id} not found in guild: {guild.name} (ID: {guild.id})")
-                                except ValueError as e:
-                                    print(f"Invalid private_logs channel ID {private_logs_id}: {e}")
-                            else:
-                                print("private_logs channel ID not provided, skipping private log.")
-                        except Exception as e:
-                            print(f"Unexpected error in log sending process: {e}")
+                                        permissions = private_channel.permissions_for(private_channel.guild.me)
+                                        if permissions.send_messages:
+                                            embed = discord.Embed(
+                                                description=(
+                                                    f"{interaction.user.mention} purchased `{product_name}` **x{self.amount}** with *{total_cost} credits* at <t:{current_time}:T>\n"
+                                                    f"New balance: {balances[user_id_str]} | Order ID: ||{order_id}||"
+                                                ),
+                                                color=discord.Color.yellow(),
+                                                timestamp=discord.utils.utcnow()
+                                            )
+                                            embed.set_footer(text="Purchase Completed")
+                                            await private_channel.send(embed=embed)
+                                except ValueError:
+                                    pass
+                        except Exception:
+                            pass
 
                     except Exception as e:
-                        print(f"Exception in ProductSelect callback: {e}")
                         await interaction.followup.send(f"Error during purchase process: {e}", ephemeral=True)
 
-            # 將 bot 物件傳遞給 ProductSelect
             view = discord.ui.View()
             view.add_item(ProductSelect(available_products, amount, self.bot))
             await interaction.response.send_message("Please select a product to purchase:", view=view, ephemeral=True)
 
         except Exception as e:
-            print(f"Exception in /purchase command: {e}")
             await interaction.response.send_message(f"Error during purchase process: {e}", ephemeral=True)
 
 async def setup(bot):

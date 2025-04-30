@@ -10,15 +10,14 @@ def load_permissions():
         with open('configs/permissions.json', 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
-        print(f"Error loading permissions.json: {e}")
         return {"users": [], "roles": []}
 
 def load_prices():
     try:
         with open('configs/price.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+            return data
     except Exception as e:
-        print(f"Error loading price.json: {e}")
         return {}
 
 def save_prices(prices):
@@ -26,7 +25,7 @@ def save_prices(prices):
         with open('configs/price.json', 'w', encoding='utf-8') as f:
             json.dump(prices, f, indent=4, ensure_ascii=False)
     except Exception as e:
-        print(f"Error saving price.json: {e}")
+        pass
 
 def has_special_permission(user_id, role_ids):
     permissions = load_permissions()
@@ -56,17 +55,24 @@ class Product(commands.Cog):
     @product_group.command(name="create", description="Create a new product")
     @app_commands.describe(
         name="The name of the product",
-        price="The price of the product"
+        price="The price of the product",
+        limit="The purchase limit per transaction (optional)"
     )
-    async def create(self, interaction: discord.Interaction, name: str, price: int):
+    async def create(self, interaction: discord.Interaction, name: str, price: int, limit: int = None):
         if not has_special_permission(interaction.user.id, [role.id for role in interaction.user.roles]):
             await interaction.response.send_message("You do not have permission to use this command!", ephemeral=True)
             return
 
-
+        if not name.isalnum():
+            await interaction.response.send_message("Product name can only contain letters and numbers!", ephemeral=True)
+            return
 
         if price < 0:
             await interaction.response.send_message("Price cannot be negative!", ephemeral=True)
+            return
+
+        if limit is not None and limit <= 0:
+            await interaction.response.send_message("Limit must be a positive number!", ephemeral=True)
             return
 
         stock_dir = 'stock'
@@ -86,10 +92,10 @@ class Product(commands.Cog):
             return
 
         prices = load_prices()
-        prices[f"{name}.txt"] = price
+        prices[f"{name}.txt"] = {"price": price, "limit": limit}
         save_prices(prices)
 
-        await interaction.response.send_message(f"Successfully created product '{name}' with price {price}!", ephemeral=True)
+        await interaction.response.send_message(f"Successfully created product '{name}' with price {price}" + (f" and limit {limit}" if limit is not None else "") + "!", ephemeral=True)
 
     @product_group.command(name="remove", description="Remove a product")
     @app_commands.describe(file="The product to remove")
@@ -129,17 +135,17 @@ class Product(commands.Cog):
         await view.wait()
 
         if view.value is None:
-            await interaction.followup.send("Operation timed out, product not deleted.", ephemeral=True)
+            await interaction.response.send_message("Operation timed out, product not deleted.", ephemeral=True)
             return
         if not view.value:
-            await interaction.followup.send("Deletion canceled.", ephemeral=True)
+            await interaction.response.send_message("Deletion canceled.", ephemeral=True)
             return
 
         target_file = os.path.join(stock_dir, f"{file}.txt")
         try:
             os.remove(target_file)
         except Exception as e:
-            await interaction.followup.send(f"Failed to delete file: {e}", ephemeral=True)
+            await interaction.response.send_message(f"Failed to delete file: {e}", ephemeral=True)
             return
 
         prices = load_prices()
@@ -147,7 +153,7 @@ class Product(commands.Cog):
             del prices[f"{file}.txt"]
             save_prices(prices)
 
-        await interaction.followup.send(f"Successfully deleted product '{file}'!", ephemeral=True)
+        await interaction.response.send_message(f"Successfully deleted product '{file}'!", ephemeral=True)
 
     @product_group.command(name="stock", description="Manage product stock")
     @app_commands.describe(
