@@ -5,3 +5,4 @@ pytz
 datetime
 typing
 aiofiles
+requests
