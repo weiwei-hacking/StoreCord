@@ -40,7 +40,7 @@ class Stock(commands.Cog):
             if price_data:
                 price = price_data.get('price', 'N/A')
                 limit = price_data.get('limit', 'N/A')
-                price_display = f"Price: {price}, Maximum: {limit}"
+                price_display = f"\n**Price:** `{price} credit`\n**Maximum:** `{limit} per time`"
             else:
                 price_display = "Price: N/A, Maximum: N/A"
             stock_info.append((txt_file[:-4], len(lines), price_display))
@@ -53,13 +53,13 @@ class Stock(commands.Cog):
         )
         for file_name, line_count, price_display in stock_info:
             embed.add_field(
-                name=file_name,
-                value=f"{line_count} stock, {price_display}",
+                name=f"__{file_name}:__",
+                value=f"**Stock:** `{line_count} stock`{price_display}",
                 inline=False
             )
         embed.set_footer(text=f"Queried by {interaction.user.display_name}")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Stock(bot))
