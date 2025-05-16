@@ -135,7 +135,7 @@ class Restock(commands.Cog):
                 random_color = discord.Color(random.randint(0, 0xFFFFFF))
                 embed = discord.Embed(
                     title="Restock Notification",
-                    description=f"Product `{file}` has been restocked by {interaction.user.mention} with **{restock_count} stock!**",
+                    description=f"Product `{file}` has been restocked with **{restock_count} units!**",
                     color=random_color,
                     timestamp=datetime.now()
                 )

@@ -83,6 +83,7 @@ class Purchase(commands.Cog):
             balances = load_balances()
             user_balance = balances.get(user_id_str, 0)
 
+# 檢查產品價格並計算最低價格
             prices = load_prices()
             if not prices:
                 await interaction.response.send_message("No products available for purchase currently!", ephemeral=True)
@@ -93,10 +94,22 @@ class Purchase(commands.Cog):
                 price = product_data.get('price', float('inf'))
                 if price < min_price:
                     min_price = price
+
+            # 如果最低價格無限大，說明沒有有效產品價格
+            if min_price == float('inf'):
+                await interaction.response.send_message("No valid product prices available!", ephemeral=True)
+                return
+
+            balances = load_balances()
+            user_id_str = str(interaction.user.id)
+            user_balance = balances.get(user_id_str, 0)
+
+            # 檢查用戶積分是否足夠購買最低價格的產品
             if user_balance < min_price:
                 await interaction.response.send_message("Insufficient credits to purchase any product!", ephemeral=True)
                 return
 
+            # 檢查用戶是否能負擔指定數量的產品
             affordable_products = {}
             for product_file, product_data in prices.items():
                 price = product_data.get('price', 0)
@@ -105,9 +118,10 @@ class Purchase(commands.Cog):
                     affordable_products[product_file] = (price, total_cost)
 
             if not affordable_products:
-                await interaction.response.send_message("Your credits are insufficient to purchase any product!", ephemeral=True)
+                await interaction.response.send_message("Your credits are insufficient to purchase the requested quantity!", ephemeral=True)
                 return
 
+            # 檢查庫存
             stock_dir = 'stock'
             if not os.path.exists(stock_dir):
                 await interaction.response.send_message("No product stock available currently!", ephemeral=True)
@@ -127,7 +141,7 @@ class Purchase(commands.Cog):
             if not available_products:
                 await interaction.response.send_message(f"No products with stock greater than or equal to {amount}!", ephemeral=True)
                 return
-
+            
             class ProductSelect(discord.ui.Select):
                 def __init__(self, products, amount, bot):
                     options = [
@@ -199,11 +213,21 @@ class Purchase(commands.Cog):
                             @discord.ui.button(label="Yes", style=discord.ButtonStyle.green)
                             async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
                                 self.value = True
+                                # 編輯原始訊息並移除按鈕
+                                await interaction.response.edit_message(
+                                    content="Processing your purchase...", 
+                                    view=None
+                                )
                                 self.stop()
 
                             @discord.ui.button(label="No", style=discord.ButtonStyle.red)
                             async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
                                 self.value = False
+                                # 編輯原始訊息並移除按鈕
+                                await interaction.response.edit_message(
+                                    content="Purchase canceled.", 
+                                    view=None
+                                )
                                 self.stop()
 
                         view = ConfirmView(interaction, product_name, price, total_cost, self.amount)
@@ -214,18 +238,18 @@ class Purchase(commands.Cog):
                         )
                         await view.wait()
 
-                        if view.value is None:
-                            await interaction.followup.send("Operation timed out, purchase canceled.", ephemeral=True)
-                            return
-                        if not view.value:
-                            await interaction.followup.send("Purchase canceled.", ephemeral=True)
-                            return
+                        if view.value is None or not view.value:
+                            return  # 超時或取消已由按鈕處理
 
+                        # 繼續處理購買邏輯
                         balances = load_balances()
                         user_id_str = str(interaction.user.id)
                         user_balance = balances.get(user_id_str, 0)
                         if user_balance < total_cost:
-                            await interaction.followup.send("Your credits are insufficient to complete this purchase!", ephemeral=True)
+                            await interaction.edit_original_response(
+                                content="Your credits are insufficient to complete this purchase!", 
+                                view=None
+                            )
                             return
                         balances[user_id_str] = user_balance - total_cost
                         save_balances(balances)
@@ -271,10 +295,22 @@ class Purchase(commands.Cog):
                         discord_file = discord.File(order_path, filename=order_filename)
                         try:
                             await interaction.user.send(file=discord_file)
-                            await interaction.followup.send("Order file has been sent to your DMs!", ephemeral=True)
+                            await interaction.edit_original_response(
+                                content="Order file has been sent to your DMs!", 
+                                view=None
+                            )
                         except discord.Forbidden:
                             discord_file = discord.File(order_path, filename=order_filename)
-                            await interaction.followup.send(file=discord_file, ephemeral=True)
+                            await interaction.edit_original_response(
+                                content="Order file sent below:", 
+                                file=discord_file, 
+                                view=None
+                            )
+                    except Exception as e:
+                        await interaction.edit_original_response(
+                            content=f"Error during purchase process: {e}", 
+                            view=None
+                        )
 
                         try:
                             configs = load_configs()

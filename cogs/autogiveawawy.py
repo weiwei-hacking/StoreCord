@@ -6,6 +6,11 @@ import time
 import asyncio
 from datetime import datetime
 import random
+import logging
+
+# 設置日誌以便調試
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def load_permissions():
     try:
@@ -53,18 +58,74 @@ class AutoGiveaway(commands.Cog):
         self.bot = bot
         self.giveaways = load_giveaways()
         self.bot.loop.create_task(self.check_giveaways())
+        self.bot.loop.create_task(self.update_participant_count())
 
-    async def send_giveaway_message(self, channel, guild_id, mention, winners, prize):
+    async def update_giveaway_message(self, channel, giveaway_id, mention, winners, prize, entries_count):
         embed = discord.Embed(
             title="Credit Giveaway!",
-            description=f"Good Luck for `{winners} winners` with **{prize} credit**!",
+            description=f"Good Luck for `{winners} winners` with **{prize} credit**!\nEntries: **{entries_count}**",
             color=discord.Color.blue(),
             timestamp=datetime.now()
         )
         view = discord.ui.View(timeout=None)
-        view.add_item(self.GiveawayButton(guild_id))
+        view.add_item(self.GiveawayButton(giveaway_id))
         message = await channel.send(content=mention if mention else "", embed=embed, view=view)
         return message
+
+    async def edit_giveaway_message(self, channel, message_id, mention, winners, prize, entries_count, giveaway_id):
+        embed = discord.Embed(
+            title="Credit Giveaway!",
+            description=f"Good Luck for `{winners} winners` with **{prize} credit**!\nEntries: **{entries_count}**",
+            color=discord.Color.blue(),
+            timestamp=datetime.now()
+        )
+        view = discord.ui.View(timeout=None)
+        view.add_item(self.GiveawayButton(giveaway_id))
+        try:
+            message = await channel.fetch_message(message_id)
+            # 檢查權限
+            permissions = channel.permissions_for(channel.guild.me)
+            if not permissions.manage_messages:
+                logger.warning("Bot lacks MANAGE_MESSAGES permission to edit giveaway message.")
+                # 如果無法編輯，發送新訊息並更新 message_id
+                new_message = await channel.send(content=mention if mention else "", embed=embed, view=view)
+                return new_message.id
+            await message.edit(embed=embed, view=view)
+            return message.id
+        except discord.HTTPException as e:
+            logger.error(f"Failed to edit message {message_id}: {e}")
+            # 如果編輯失敗，發送新訊息並更新 message_id
+            new_message = await channel.send(content=mention if mention else "", embed=embed, view=view)
+            return new_message.id
+
+    async def send_giveaway_message(self, channel, giveaway_id, mention, winners, prize):
+        giveaways = load_giveaways()
+        giveaway = giveaways.get(str(giveaway_id))
+        entry_count = len(giveaway.get('entries', [])) if giveaway else 0
+        return await self.update_giveaway_message(channel, giveaway_id, mention, winners, prize, entry_count)
+
+    async def update_participant_count(self):
+        while True:
+            current_time = int(time.time())
+            giveaways = load_giveaways()
+            for giveaway_id, giveaway in giveaways.items():
+                if giveaway.get('start_time', 0) > 0 and current_time >= giveaway['start_time']:
+                    if (current_time - giveaway['start_time']) % 3 == 0:  # 每 3 秒檢查一次
+                        channel = self.bot.get_channel(giveaway['channel'])
+                        if channel:
+                            entries_count = len(giveaway.get('entries', []))
+                            last_count = giveaway.get('last_count', -1)
+                            if entries_count != last_count:  # 人數增加或減少時觸發
+                                new_message_id = await self.edit_giveaway_message(
+                                    channel, giveaway['message'], giveaway['mention'],
+                                    giveaway['winners'], giveaway['prize'], entries_count, giveaway_id
+                                )
+                                if new_message_id != giveaway['message']:
+                                    giveaway['message'] = new_message_id
+                                giveaway['last_count'] = entries_count
+                                giveaways[giveaway_id] = giveaway
+                                save_giveaways(giveaways)
+            await asyncio.sleep(1)  # 每秒檢查一次，配合 % 3 實現每 3 秒更新
 
     async def check_giveaways(self):
         while True:
@@ -79,13 +140,15 @@ class AutoGiveaway(commands.Cog):
                         save_giveaways(giveaways)
                         continue
 
-                    # 發送第一次抽獎
-                    message = await self.send_giveaway_message(
-                        channel, giveaway_id, giveaway['mention'], giveaway['winners'], giveaway['prize']
+                    # 發送第一次抽獎，參加人數立即歸 0
+                    message = await self.update_giveaway_message(
+                        channel, giveaway_id, giveaway['mention'], giveaway['winners'], giveaway['prize'], 0
                     )
                     giveaway['message'] = message.id
                     giveaway['time'] = current_time + (giveaway['first_time'] - giveaway['start_time'])
                     giveaway['pending'] = False
+                    giveaway['last_count'] = 0  # 立即重置參加人數
+                    giveaway['start_time'] = current_time  # 重新計算 3 秒計時
                     giveaways[giveaway_id] = giveaway
                     save_giveaways(giveaways)
                     continue
@@ -98,8 +161,8 @@ class AutoGiveaway(commands.Cog):
                         save_giveaways(giveaways)
                         continue
 
-                    old_message = await channel.fetch_message(giveaway['message'])
                     try:
+                        old_message = await channel.fetch_message(giveaway['message'])
                         await old_message.delete()
                     except discord.HTTPException:
                         pass  # 忽略刪除失敗的情況
@@ -123,19 +186,46 @@ class AutoGiveaway(commands.Cog):
                         winner_mentions = ', '.join(f"<@{winner_id}>" for winner_id in winners)
                         await channel.send(f"Congratulations {winner_mentions}! You won the **{prize} credit**!")
 
-                    # 發送新的抽獎
-                    new_message = await self.send_giveaway_message(
-                        channel, giveaway_id, giveaway['mention'], giveaway['winners'], giveaway['prize']
+                    # 發送新的抽獎，參加人數立即歸 0
+                    new_message = await self.update_giveaway_message(
+                        channel, giveaway_id, giveaway['mention'], giveaway['winners'], giveaway['prize'], 0
                     )
 
                     # 更新抽獎資訊
                     giveaway['message'] = new_message.id
                     giveaway['time'] = current_time + (giveaway['time'] - giveaway['start_time'])
                     giveaway['entries'] = []
+                    giveaway['last_count'] = 0  # 立即重置參加人數
+                    giveaway['start_time'] = current_time  # 重新計算 3 秒計時
                     giveaways[giveaway_id] = giveaway
                     save_giveaways(giveaways)
 
             await asyncio.sleep(1)  # 每秒檢查一次
+
+    class LeaveGiveawayButton(discord.ui.Button):
+        def __init__(self, giveaway_id, user_id):
+            super().__init__(label="Leave giveaway", style=discord.ButtonStyle.danger)
+            self.giveaway_id = giveaway_id
+            self.user_id = user_id
+
+        async def callback(self, interaction: discord.Interaction):
+            giveaways = load_giveaways()
+            giveaway = giveaways.get(str(self.giveaway_id))
+            if not giveaway:
+                await interaction.response.send_message("This giveaway has ended or does not exist.", ephemeral=True)
+                return
+
+            entries = giveaway.get('entries', [])
+            if self.user_id not in entries:
+                await interaction.response.send_message("You are not in this giveaway!", ephemeral=True)
+                return
+
+            entries.remove(self.user_id)
+            giveaway['entries'] = entries
+            giveaways[str(self.giveaway_id)] = giveaway
+            save_giveaways(giveaways)
+
+            await interaction.response.send_message("You have left the giveaway!", ephemeral=True)
 
     class GiveawayButton(discord.ui.Button):
         def __init__(self, giveaway_id):
@@ -152,13 +242,24 @@ class AutoGiveaway(commands.Cog):
             user_id = interaction.user.id
             entries = giveaway.get('entries', [])
             if user_id in entries:
-                await interaction.response.send_message("You have already entered this giveaway!", ephemeral=True)
+                cog = interaction.client.get_cog('AutoGiveaway')
+                if not cog:
+                    await interaction.response.send_message("Error: Could not load giveaway system.", ephemeral=True)
+                    return
+                view = discord.ui.View(timeout=60)
+                view.add_item(cog.LeaveGiveawayButton(self.giveaway_id, user_id))
+                await interaction.response.send_message(
+                    "You have already entered! Do you want to leave?",
+                    view=view,
+                    ephemeral=True
+                )
                 return
 
             entries.append(user_id)
             giveaway['entries'] = entries
             giveaways[str(self.giveaway_id)] = giveaway
             save_giveaways(giveaways)
+
             await interaction.response.send_message("You have successfully entered the giveaway!", ephemeral=True)
 
     @app_commands.command(name="autogc", description="Start an automatic giveaway (special permission required)")
@@ -192,12 +293,15 @@ class AutoGiveaway(commands.Cog):
         # 處理 mention
         mention_value = ""
         if mention:
-            try:
-                parsed_role = await commands.RoleConverter().convert(interaction, mention)
-                mention_value = f"<@&{parsed_role.id}>"
-            except commands.RoleNotFound:
-                await interaction.response.send_message("Invalid role mention!", ephemeral=True)
-                return
+            if mention.lower() == "@everyone":
+                mention_value = "@everyone"
+            else:
+                try:
+                    parsed_role = await commands.RoleConverter().convert(interaction, mention)
+                    mention_value = f"<@&{parsed_role.id}>"
+                except commands.RoleNotFound:
+                    await interaction.response.send_message("Invalid role mention!", ephemeral=True)
+                    return
 
         # 計算時間
         current_time = int(time.time())
@@ -217,7 +321,8 @@ class AutoGiveaway(commands.Cog):
             "winners": winners,
             "prize": prize,
             "entries": [],
-            "pending": timing == "nexttime"
+            "pending": timing == "nexttime",
+            "last_count": 0  # 初始參加人數
         }
 
         # 如果是 now，立即發送第一次抽獎
