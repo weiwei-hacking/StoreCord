@@ -9,8 +9,7 @@ with open('token.txt', 'r') as f:
 intents = discord.Intents.all()
 intents.members = True
 
-activity = discord.Game(name="StoreCord v2.0.0")
-bot = commands.Bot(command_prefix='/', intents=intents, status=discord.Status.idle, activity=activity)
+bot = commands.Bot(command_prefix='/', intents=intents)
 
 async def load_extensions():
     for filename in os.listdir("./cogs"):
@@ -20,6 +19,7 @@ async def load_extensions():
 @bot.event
 async def on_ready():
     await bot.tree.sync()
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.competing, name="#1 discord store bot"))
     os.system("cls")
     print(f'{bot.user} is online')
 
